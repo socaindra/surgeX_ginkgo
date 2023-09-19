@@ -1,43 +1,80 @@
-export PATH="$HOME/proton/bin:$PATH"
-SECONDS=0
-ZIPNAME="SurgeX-ginkgo-$(date '+%Y%m%d-%H%M').zip"
+#!/bin/bash
 
-if ! [ -d "$HOME/proton" ]; then
-echo "Proton clang not found! Cloning..."
-if ! git clone -q https://github.com/kdrag0n/proton-clang --depth=1 --single-branch ~/proton; then
+SECONDS=0 # builtin bash timer
+ZIPNAME="SurgeX-ginkgo-KSU-$(TZ=Asia/Jakarta date +"%Y%m%d-%H%M").zip"
+TC_DIR="$HOME/tc/proton-clang"
+GCC_64_DIR="$HOME/tc/aarch64-linux-android-4.9"
+GCC_32_DIR="$HOME/tc/arm-linux-androideabi-4.9"
+AK3_DIR="$HOME/android/AnyKernel3"
+DEFCONFIG="vendor/ginkgo-perf_defconfig"
+
+export PATH="$TC_DIR/bin:$PATH"
+export KBUILD_BUILD_USER="Vermouth"
+export KBUILD_BUILD_HOST="reductize"
+export KBUILD_BUILD_VERSION="1"
+
+if ! [ -d "${TC_DIR}" ]; then
+echo "Clang not found! Cloning to ${TC_DIR}..."
+if ! git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ${TC_DIR}; then
 echo "Cloning failed! Aborting..."
 exit 1
 fi
 fi
 
-mkdir -p out
-make O=out ARCH=arm64 vendor/ginkgo-perf_defconfig
-
-if [[ $1 == "-r" || $1 == "--regen" ]]; then
-cp out/.config arch/arm64/configs/vendor/ginkgo-perf_defconfig
-echo -e "\nRegened defconfig succesfully!"
-exit 0
-else
-echo -e "\nStarting compilation...\n"
-make -j$(nproc --all) O=out ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- Image.gz-dtb dtbo.img
+if ! [ -d "${GCC_64_DIR}" ]; then
+echo "gcc not found! Cloning to ${GCC_64_DIR}..."
+if ! git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git ${GCC_64_DIR}; then
+echo "Cloning failed! Aborting..."
+exit 1
 fi
+fi
+
+if ! [ -d "${GCC_32_DIR}" ]; then
+echo "gcc_32 not found! Cloning to ${GCC_32_DIR}..."
+if ! git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git ${GCC_32_DIR}; then
+echo "Cloning failed! Aborting..."
+exit 1
+fi
+fi
+
+if [[ $1 = "-r" || $1 = "--regen" ]]; then
+make O=out ARCH=arm64 $DEFCONFIG savedefconfig
+cp out/defconfig arch/arm64/configs/$DEFCONFIG
+exit
+fi
+
+if [[ $1 = "-c" || $1 = "--clean" ]]; then
+rm -rf out
+fi
+
+mkdir -p out
+make O=out ARCH=arm64 $DEFCONFIG
+
+echo -e "\nStarting compilation...\n"
+make -j$(nproc --all) O=out ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar AS=llvm-as NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=$GCC_64_DIR/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$GCC_32_DIR/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- Image.gz-dtb dtbo.img
 
 if [ -f "out/arch/arm64/boot/Image.gz-dtb" ] && [ -f "out/arch/arm64/boot/dtbo.img" ]; then
 echo -e "\nKernel compiled succesfully! Zipping up...\n"
-git clone -q https://github.com/madmax7896/AnyKernel3
+if [ -d "$AK3_DIR" ]; then
+cp -r $AK3_DIR AnyKernel3
+elif ! git clone -q https://github.com/socaindra/AnyKernel3; then
+echo -e "\nAnyKernel3 repo not found locally and cloning failed! Aborting..."
+exit 1
+fi
 cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3
 cp out/arch/arm64/boot/dtbo.img AnyKernel3
+rm -f *zip
 cd AnyKernel3
+git checkout master &> /dev/null
 zip -r9 "../$ZIPNAME" * -x '*.git*' README.md *placeholder
 cd ..
 rm -rf AnyKernel3
-echo -e "\nCompleted in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) !"
-if command -v gdrive &> /dev/null; then
-gdrive upload --share $ZIPNAME
-else
-echo "Zip: $ZIPNAME"
-fi
 rm -rf out/arch/arm64/boot
+echo -e "\nCompleted in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) !"
+echo "Zip: $ZIPNAME"
+echo "----------------------------------"
+curl -T $ZIPNAME temp.sh | tail -n -1
 else
 echo -e "\nCompilation failed!"
+exit 1
 fi
